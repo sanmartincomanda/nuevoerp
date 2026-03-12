@@ -65,8 +65,8 @@ export const registerAccountingEntry = async (entryData) => {
     } = entryData;
 
     // Validación: La suma de DEBITOS debe igualar la suma de CREDITOS
-    const totalDebitos = movimientos.filter(m => m.tipo === 'DEBITO').reduce((sum, m) => sum + m.monto, 0);
-    const totalCreditos = movimientos.filter(m => m.tipo === 'CREDITO').reduce((sum, m) => sum + m.monto, 0);
+    const totalDebitos = movimientos.filter(m => m.tipo === 'DEBITO').reduce((sum, m) => sum + Number(m.monto || 0), 0);
+    const totalCreditos = movimientos.filter(m => m.tipo === 'CREDITO').reduce((sum, m) => sum + Number(m.monto || 0), 0);
     
     if (Math.abs(totalDebitos - totalCreditos) > 0.01) {
         throw new Error(`Partida descuadrada: Débitos ${totalDebitos} ≠ Créditos ${totalCreditos}`);
@@ -143,24 +143,28 @@ export const registerAccountingEntry = async (entryData) => {
             
             if (nature === ACCOUNT_NATURE.DEUDORA) {
                 // Cuentas deudoras: DEBITO aumenta, CREDITO disminuye
-                cambioBalance = mov.tipo === 'DEBITO' ? mov.monto : -mov.monto;
-                cambioBalanceUSD = mov.tipo === 'DEBITO' ? (mov.montoUSD || 0) : -(mov.montoUSD || 0);
+                cambioBalance = mov.tipo === 'DEBITO' ? Number(mov.monto || 0) : -Number(mov.monto || 0);
+                cambioBalanceUSD = mov.tipo === 'DEBITO' ? Number(mov.montoUSD || 0) : -Number(mov.montoUSD || 0);
             } else {
                 // Cuentas acreedoras: CREDITO aumenta, DEBITO disminuye
-                cambioBalance = mov.tipo === 'CREDITO' ? mov.monto : -mov.monto;
-                cambioBalanceUSD = mov.tipo === 'CREDITO' ? (mov.montoUSD || 0) : -(mov.montoUSD || 0);
+                cambioBalance = mov.tipo === 'CREDITO' ? Number(mov.monto || 0) : -Number(mov.monto || 0);
+                cambioBalanceUSD = mov.tipo === 'CREDITO' ? Number(mov.montoUSD || 0) : -Number(mov.montoUSD || 0);
             }
 
-            const nuevoBalance = Number(((cuenta.balance || 0) + cambioBalance).toFixed(2));
-            const nuevoBalanceUSD = Number(((cuenta.balanceUSD || 0) + cambioBalanceUSD).toFixed(2));
+            // CORRECCIÓN: Forzar conversión a número antes de operar
+            const balanceActual = Number(cuenta.balance) || 0;
+            const balanceUSDActual = Number(cuenta.balanceUSD) || 0;
+            
+            const nuevoBalance = Number((balanceActual + cambioBalance).toFixed(2));
+            const nuevoBalanceUSD = Number((balanceUSDActual + cambioBalanceUSD).toFixed(2));
 
             transaction.update(cuentaRef, {
                 balance: nuevoBalance,
                 balanceUSD: nuevoBalanceUSD,
                 updatedAt: Timestamp.now()
             });
-        }
-    });
+        } // <-- CIERRE DEL FOR LOOP (FALTABA ESTO)
+    }); // <-- CIERRE DE runTransaction
 
     return {
         success: true,
@@ -403,11 +407,7 @@ export const procesarCierreCajaERP = async (cierreId, userId, userEmail) => {
     
     const cierre = cierreSnap.data();
     
-    if (cierre.estado !== 'cerrado') {
-        throw new Error('El cierre debe estar en estado "cerrado" para procesarse');
-    }
-    
-    if (cierre.procesado) {
+      if (cierre.procesado) {
         throw new Error('Este cierre ya fue procesado anteriormente');
     }
 

@@ -12,6 +12,8 @@ import {
     getNICAccounts,
     getCustomAccounts
 } from '../services/chartOfAccountsService';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../firebase';
 
 // Crear contexto
 const AccountingContext = createContext(null);
@@ -100,6 +102,24 @@ export const AccountingProvider = ({ children }) => {
         return accounts.filter(a => a.nicStandard !== true && a.active !== false);
     }, [accounts]);
 
+    // 🔥 NUEVA FUNCIÓN: Obtener cuentas de caja por moneda
+    const getCajaAccounts = useCallback(async (moneda = 'NIO') => {
+        try {
+            const accountsRef = collection(db, 'planCuentas');
+            const q = query(
+                accountsRef, 
+                where('subType', 'in', ['caja', 'transito']),
+                where('currency', '==', moneda),
+                where('isActive', '==', true)
+            );
+            const snapshot = await getDocs(q);
+            return snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        } catch (err) {
+            console.error('Error obteniendo cajas:', err);
+            return [];
+        }
+    }, []);
+
     const value = {
         accounts,
         loading,
@@ -112,7 +132,8 @@ export const AccountingProvider = ({ children }) => {
         getAccountByCode,
         getAccountsByType,
         getNICAccounts,
-        getCustomAccounts
+        getCustomAccounts,
+        getCajaAccounts // 🔥 Exportada
     };
 
     return (
@@ -160,11 +181,30 @@ export const useChartOfAccounts = () => {
         }
     }, []);
 
+    // 🔥 NUEVA FUNCIÓN: Obtener cuentas de caja por moneda
+    const getCajaAccounts = useCallback(async (moneda = 'NIO') => {
+        try {
+            const accountsRef = collection(db, 'planCuentas');
+            const q = query(
+                accountsRef, 
+                where('subType', 'in', ['caja', 'transito']),
+                where('currency', '==', moneda),
+                where('isActive', '==', true)
+            );
+            const snapshot = await getDocs(q);
+            return snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+        } catch (err) {
+            console.error('Error obteniendo cajas:', err);
+            return [];
+        }
+    }, []);
+
     return {
         accounts,
         loading,
         error,
-        refreshAccounts
+        refreshAccounts,
+        getCajaAccounts // 🔥 Exportada
     };
 };
 

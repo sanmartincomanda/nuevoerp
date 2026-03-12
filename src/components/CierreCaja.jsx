@@ -604,187 +604,215 @@ export default function CierreCaja() {
 
     const handleFotosChange = (fotos) => setFormData(prev => ({ ...prev, fotos }));
 
-    // Guardar cierre
-    const handleSave = async (estado = 'borrador') => {
-        setLoading(true);
-        try {
-            const cierreData = { 
-                ...formData, 
-                estado, 
-                ventasReales,
-                userId: user?.uid, 
-                userEmail: user?.email 
-            };
-            const cierreResult = await createCierreCaja(cierreData);
-
-            let fotosUrls = [];
-            if (formData.fotos.length > 0) {
-                const fotoFiles = formData.fotos.filter(f => f instanceof File);
-                if (fotoFiles.length > 0) {
-                    fotosUrls = await uploadMultiplePhotos(fotoFiles, 'cierres', cierreResult.id);
-                    await updateDoc(doc(db, 'cierresCaja', cierreResult.id), {
-                        fotos: fotosUrls,
-                        updatedAt: Timestamp.now()
-                    });
-                }
+  const handleSave = async (estado = 'borrador') => {
+    setLoading(true);
+    try {
+        // VALIDACIÓN PARA CIERRE DIRECTO
+        if (estado === 'cerrado') {
+            // Verificar que haya datos mínimos
+            if (!formData.totalIngreso || Number(formData.totalIngreso) <= 0) {
+                throw new Error('Debe ingresar el Total Ingreso para cerrar la caja');
             }
-
-            if (estado === 'cerrado') {
-                // Registrar INGRESOS (antes Ventas)
-                if (ventasReales > 0) {
-                    await addDoc(collection(db, 'ingresos'), {
-                        fecha: formData.fecha,
-                        monto: ventasReales,
-                        descripcion: `Ingresos - Cierre ${formData.caja} ${formData.fecha}`,
-                        categoria: 'Ingresos',
-                        sucursal: formData.tienda,
-                        referencia: `CIERRE-${cierreResult.id}`,
-                        cierreCajaId: cierreResult.id,
-                        createdAt: Timestamp.now(),
-                        createdBy: user?.uid,
-                        createdByEmail: user?.email
-                    });
-                }
-
-                // Registrar CRÉDITOS
-                if (Number(formData.totalFacturasCredito) > 0) {
-                    await addDoc(collection(db, 'ingresos'), {
-                        fecha: formData.fecha,
-                        monto: Number(formData.totalFacturasCredito),
-                        descripcion: `Facturas de Crédito - Cierre ${formData.caja} ${formData.fecha}`,
-                        categoria: 'Ventas al Crédito',
-                        sucursal: formData.tienda,
-                        referencia: `CIERRE-${cierreResult.id}`,
-                        cierreCajaId: cierreResult.id,
-                        tipo: 'credito',
-                        cantidadFacturas: Number(formData.facturasCredito) || 0,
-                        createdAt: Timestamp.now(),
-                        createdBy: user?.uid,
-                        createdByEmail: user?.email
-                    });
-                }
-
-                // Registrar ABONOS
-                if (Number(formData.totalAbonos) > 0) {
-                    await addDoc(collection(db, 'ingresos'), {
-                        fecha: formData.fecha,
-                        monto: Number(formData.totalAbonos),
-                        descripcion: `Abonos Recibidos - Cierre ${formData.caja} ${formData.fecha}`,
-                        categoria: 'Abonos Clientes',
-                        sucursal: formData.tienda,
-                        referencia: `CIERRE-${cierreResult.id}`,
-                        cierreCajaId: cierreResult.id,
-                        tipo: 'abono',
-                        cantidadAbonos: Number(formData.abonosRecibidos) || 0,
-                        createdAt: Timestamp.now(),
-                        createdBy: user?.uid,
-                        createdByEmail: user?.email
-                    });
-                }
-
-                // Registrar GASTOS DE CAJA
-                for (const gasto of formData.gastosCaja) {
-                    if (Number(gasto.monto) > 0) {
-                        let gastoFotos = [];
-                        if (gasto.fotos && gasto.fotos.length > 0) {
-                            const fotoFiles = gasto.fotos.filter(f => f instanceof File);
-                            if (fotoFiles.length > 0) {
-                                gastoFotos = await uploadMultiplePhotos(fotoFiles, 'gastos', `cierre-${cierreResult.id}`);
-                            }
-                        }
-
-                        await addDoc(collection(db, 'gastos'), {
-                            fecha: formData.fecha,
-                            monto: Number(gasto.monto),
-                            descripcion: `Gasto de caja: ${gasto.concepto} - Cierre ${formData.caja}`,
-                            categoria: gasto.categoriaNombre || 'Otros Gastos',
-                            categoriaId: gasto.categoriaId || null,
-                            sucursal: formData.tienda,
-                            responsable: gasto.responsable,
-                            referencia: `CIERRE-${cierreResult.id}`,
-                            cierreCajaId: cierreResult.id,
-                            tipo: 'gasto_caja',
-                            fotos: gastoFotos,
-                            createdAt: Timestamp.now(),
-                            createdBy: user?.uid,
-                            createdByEmail: user?.email
-                        });
-                    }
-                }
-
-                // Registrar RETENCIONES
-                for (const ret of formData.retenciones) {
-                    if (Number(ret.monto) > 0) {
-                        await addDoc(collection(db, 'gastos'), {
-                            fecha: formData.fecha,
-                            monto: Number(ret.monto),
-                            descripcion: `Retención ${ret.tipo}: ${ret.tipo === 'IR' ? '2% IR' : '1% Alcaldía'} - Factura ${ret.facturaRelacionada || 'N/A'}`,
-                            categoria: ret.categoriaGastoNombre || `Retención ${ret.tipo}`,
-                            categoriaId: ret.categoriaGastoId || null,
-                            sucursal: formData.tienda,
-                            cliente: ret.cliente,
-                            facturaRelacionada: ret.facturaRelacionada,
-                            referencia: `CIERRE-${cierreResult.id}`,
-                            cierreCajaId: cierreResult.id,
-                            tipo: 'retencion',
-                            tipoRetencion: ret.tipo,
-                            createdAt: Timestamp.now(),
-                            createdBy: user?.uid,
-                            createdByEmail: user?.email
-                        });
-                    }
-                }
-
-                await procesarCierreCaja(cierreResult.id, user?.uid, user?.email);
+            if (!formData.cajero) {
+                throw new Error('Debe ingresar el nombre del cajero');
             }
+        }
 
-            alert(`Cierre guardado exitosamente como ${estado.toUpperCase()}`);
-            
-            if (estado === 'cerrado') {
-                // Reset form
-                setFormData({ 
-                    fecha: new Date().toISOString().substring(0, 10), 
-                    tienda: 'CSM Granada', 
-                    caja: 'Caja Granada 1', 
-                    cajero: '', 
-                    horaApertura: '06:00', 
-                    horaCierre: '18:00', 
-                    observaciones: '', 
-                    totalIngreso: '',  // CAMBIO
-                    totalTickets: '', 
-                    totalFacturas: '', 
-                    facturasCredito: '',
-                    totalFacturasCredito: '',
-                    abonosRecibidos: '',
-                    totalAbonos: '',
-                    efectivoCS: '', 
-                    efectivoUSD: '', 
-                    tipoCambio: '36.50', 
-                    posBAC: '', 
-                    posBANPRO: '', 
-                    posLAFISE: '', 
-                    transferenciaBAC: '', 
-                    transferenciaBANPRO: '', 
-                    transferenciaLAFISE: '', 
-                    cantidadFacturasMembretadas: '', 
-                    folioInicial: '', 
-                    folioFinal: '', 
-                    montoFacturasMembretadas: '', 
-                    cantidadTickets: '', 
-                    montoTickets: '', 
-                    tieneFacturaResumen: false, 
-                    retenciones: [], 
-                    gastosCaja: [], 
-                    arqueo: null,  // Reset arqueo
-                    fotos: []
+        const cierreData = { 
+            ...formData, 
+            estado,  // Guardar con el estado deseado directamente
+            ventasReales,
+            userId: user?.uid, 
+            userEmail: user?.email 
+        };
+        
+        // 1. Crear el cierre
+        const cierreResult = await createCierreCaja(cierreData);
+
+        // 2. Subir fotos si hay
+        let fotosUrls = [];
+        if (formData.fotos.length > 0) {
+            const fotoFiles = formData.fotos.filter(f => f instanceof File);
+            if (fotoFiles.length > 0) {
+                fotosUrls = await uploadMultiplePhotos(fotoFiles, 'cierres', cierreResult.id);
+                await updateDoc(doc(db, 'cierresCaja', cierreResult.id), {
+                    fotos: fotosUrls,
+                    updatedAt: Timestamp.now()
                 });
             }
-        } catch (error) {
-            alert('Error: ' + error.message);
-        } finally {
-            setLoading(false);
         }
-    };
+
+        // 3. Si es cierre, actualizar estado a 'cerrado' explícitamente primero
+        // (Esto asegura que procesarCierreCaja vea el estado correcto)
+        if (estado === 'cerrado') {
+            await updateCierreCajaStatus(cierreResult.id, 'cerrado', user?.uid);
+            
+            // Pequeña pausa para asegurar que Firestore actualizó el estado
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            // Registrar INGRESOS
+            if (ventasReales > 0) {
+                await addDoc(collection(db, 'ingresos'), {
+                    fecha: formData.fecha,
+                    monto: ventasReales,
+                    descripcion: `Ingresos - Cierre ${formData.caja} ${formData.fecha}`,
+                    categoria: 'Ingresos',
+                    sucursal: formData.tienda,
+                    referencia: `CIERRE-${cierreResult.id}`,
+                    cierreCajaId: cierreResult.id,
+                    createdAt: Timestamp.now(),
+                    createdBy: user?.uid,
+                    createdByEmail: user?.email
+                });
+            }
+
+            // Registrar CRÉDITOS
+            if (Number(formData.totalFacturasCredito) > 0) {
+                await addDoc(collection(db, 'ingresos'), {
+                    fecha: formData.fecha,
+                    monto: Number(formData.totalFacturasCredito),
+                    descripcion: `Facturas de Crédito - Cierre ${formData.caja} ${formData.fecha}`,
+                    categoria: 'Ventas al Crédito',
+                    sucursal: formData.tienda,
+                    referencia: `CIERRE-${cierreResult.id}`,
+                    cierreCajaId: cierreResult.id,
+                    tipo: 'credito',
+                    cantidadFacturas: Number(formData.facturasCredito) || 0,
+                    createdAt: Timestamp.now(),
+                    createdBy: user?.uid,
+                    createdByEmail: user?.email
+                });
+            }
+
+            // Registrar ABONOS
+            if (Number(formData.totalAbonos) > 0) {
+                await addDoc(collection(db, 'ingresos'), {
+                    fecha: formData.fecha,
+                    monto: Number(formData.totalAbonos),
+                    descripcion: `Abonos Recibidos - Cierre ${formData.caja} ${formData.fecha}`,
+                    categoria: 'Abonos Clientes',
+                    sucursal: formData.tienda,
+                    referencia: `CIERRE-${cierreResult.id}`,
+                    cierreCajaId: cierreResult.id,
+                    tipo: 'abono',
+                    cantidadAbonos: Number(formData.abonosRecibidos) || 0,
+                    createdAt: Timestamp.now(),
+                    createdBy: user?.uid,
+                    createdByEmail: user?.email
+                });
+            }
+
+            // Registrar GASTOS DE CAJA
+            for (const gasto of formData.gastosCaja) {
+                if (Number(gasto.monto) > 0) {
+                    let gastoFotos = [];
+                    if (gasto.fotos && gasto.fotos.length > 0) {
+                        const fotoFiles = gasto.fotos.filter(f => f instanceof File);
+                        if (fotoFiles.length > 0) {
+                            gastoFotos = await uploadMultiplePhotos(fotoFiles, 'gastos', `cierre-${cierreResult.id}`);
+                        }
+                    }
+
+                    await addDoc(collection(db, 'gastos'), {
+                        fecha: formData.fecha,
+                        monto: Number(gasto.monto),
+                        descripcion: `Gasto de caja: ${gasto.concepto} - Cierre ${formData.caja}`,
+                        categoria: gasto.categoriaNombre || 'Otros Gastos',
+                        categoriaId: gasto.categoriaId || null,
+                        sucursal: formData.tienda,
+                        responsable: gasto.responsable,
+                        referencia: `CIERRE-${cierreResult.id}`,
+                        cierreCajaId: cierreResult.id,
+                        tipo: 'gasto_caja',
+                        fotos: gastoFotos,
+                        createdAt: Timestamp.now(),
+                        createdBy: user?.uid,
+                        createdByEmail: user?.email
+                    });
+                }
+            }
+
+            // Registrar RETENCIONES
+            for (const ret of formData.retenciones) {
+                if (Number(ret.monto) > 0) {
+                    await addDoc(collection(db, 'gastos'), {
+                        fecha: formData.fecha,
+                        monto: Number(ret.monto),
+                        descripcion: `Retención ${ret.tipo}: ${ret.tipo === 'IR' ? '2% IR' : '1% Alcaldía'} - Factura ${ret.facturaRelacionada || 'N/A'}`,
+                        categoria: ret.categoriaGastoNombre || `Retención ${ret.tipo}`,
+                        categoriaId: ret.categoriaGastoId || null,
+                        sucursal: formData.tienda,
+                        cliente: ret.cliente,
+                        facturaRelacionada: ret.facturaRelacionada,
+                        referencia: `CIERRE-${cierreResult.id}`,
+                        cierreCajaId: cierreResult.id,
+                        tipo: 'retencion',
+                        tipoRetencion: ret.tipo,
+                        createdAt: Timestamp.now(),
+                        createdBy: user?.uid,
+                        createdByEmail: user?.email
+                    });
+                }
+            }
+
+            // AHORA procesar el cierre contablemente (con estado ya actualizado)
+            try {
+                await procesarCierreCaja(cierreResult.id, user?.uid, user?.email);
+            } catch (procError) {
+                console.error('Error en procesarCierreCaja:', procError);
+                alert(`Cierre guardado pero error en movimientos contables: ${procError.message}`);
+                // No lanzar error para que no se rompa todo, pero informar
+            }
+        }
+
+        alert(`Cierre guardado exitosamente como ${estado.toUpperCase()}`);
+        
+        if (estado === 'cerrado') {
+            // Reset form...
+            setFormData({ 
+                fecha: new Date().toISOString().substring(0, 10), 
+                tienda: 'CSM Granada', 
+                caja: 'Caja Granada 1', 
+                cajero: '', 
+                horaApertura: '06:00', 
+                horaCierre: '18:00', 
+                observaciones: '', 
+                totalIngreso: '',  
+                totalTickets: '', 
+                totalFacturas: '', 
+                facturasCredito: '',
+                totalFacturasCredito: '',
+                abonosRecibidos: '',
+                totalAbonos: '',
+                efectivoCS: '', 
+                efectivoUSD: '', 
+                tipoCambio: '36.50', 
+                posBAC: '', 
+                posBANPRO: '', 
+                posLAFISE: '', 
+                transferenciaBAC: '', 
+                transferenciaBANPRO: '', 
+                transferenciaLAFISE: '', 
+                cantidadFacturasMembretadas: '', 
+                folioInicial: '', 
+                folioFinal: '', 
+                montoFacturasMembretadas: '', 
+                cantidadTickets: '', 
+                montoTickets: '', 
+                tieneFacturaResumen: false, 
+                retenciones: [], 
+                gastosCaja: [], 
+                arqueo: null,
+                fotos: []
+            });
+        }
+    } catch (error) {
+        console.error('Error completo:', error);
+        alert('Error: ' + error.message);
+    } finally {
+        setLoading(false);
+    }
+};
 
     const TIENDAS = [
         { value: 'CSM Granada', label: 'CSM Granada' },

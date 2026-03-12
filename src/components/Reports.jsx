@@ -223,37 +223,49 @@ export default function Reports() {
         // COS = Inventario Inicial + Costos de Ventas - Inventario Final
         const cos = inventarioInicial + costosVentasMovimientos - inventarioFinal;
         
-        // GASTOS desglosados (excluyendo costos de ventas 5.01)
-        const gastosDetalle = {};
-        let totalGastos = 0;
-        
-        gastos.forEach(g => {
-            const categoria = g.cuentaContableName || 'Otros';
-            if (!gastosDetalle[categoria]) {
-                gastosDetalle[categoria] = { amount: 0, count: 0 };
-            }
-            gastosDetalle[categoria].amount += (g.amount || 0);
-            gastosDetalle[categoria].count += 1;
-            totalGastos += (g.amount || 0);
-        });
-        
-        // También agregar gastos desde movimientos contables (tipo GASTO)
-        movimientos
-            .filter(m => {
-                // Excluir costos de ventas (5.01) y cuentas de ingreso
-                if (m.accountCode && m.accountCode.startsWith('5.01')) return false;
-                if (m.accountCode && m.accountCode.startsWith('4.')) return false; // Ingresos
-                return m.type === 'DEBITO'; // Gastos son débito
-            })
-            .forEach(m => {
-                const categoria = m.accountName || 'Otros';
-                if (!gastosDetalle[categoria]) {
-                    gastosDetalle[categoria] = { amount: 0, count: 0 };
-                }
-                gastosDetalle[categoria].amount += (m.monto || 0);
-                gastosDetalle[categoria].count += 1;
-                totalGastos += (m.monto || 0);
-            });
+       // GASTOS desglosados (SOLO cuentas 6.xx - Gastos Operativos)
+const gastosDetalle = {};
+let totalGastos = 0;
+
+// 1. Gastos de colección 'gastos' (filtrar solo los que tengan código contable de gastos)
+gastos.forEach(g => {
+    // Solo si tiene cuenta contable de gastos (6.xx) o no tiene código (para compatibilidad)
+    const cuentaCode = g.cuentaContableCode || '';
+    if (cuentaCode && !cuentaCode.toString().startsWith('6.')) {
+        // Si tiene código pero no es de gastos, no va al estado de resultado
+        return;
+    }
+    
+    const categoria = g.cuentaContableName || 'Otros';
+    if (!gastosDetalle[categoria]) {
+        gastosDetalle[categoria] = { amount: 0, count: 0, code: cuentaCode };
+    }
+    gastosDetalle[categoria].amount += (g.amount || 0);
+    gastosDetalle[categoria].count += 1;
+    totalGastos += (g.amount || 0);
+});
+
+// 2. Gastos desde movimientos contables (SOLO cuentas 6.xx)
+movimientos
+.filter(m => {
+    // SOLO cuentas de GASTOS (6.xx)
+    if (!m.accountCode) return false;
+    return m.accountCode.toString().startsWith('6.') && m.type === 'DEBITO';
+})
+.forEach(m => {
+    const categoria = m.accountName || 'Otros';
+    const code = m.accountCode || '';
+    
+    // Agrupar por código de cuenta para mejor visualización
+    const key = code ? `${code} - ${categoria}` : categoria;
+    
+    if (!gastosDetalle[key]) {
+        gastosDetalle[key] = { amount: 0, count: 0, code: code };
+    }
+    gastosDetalle[key].amount += (m.monto || 0);
+    gastosDetalle[key].count += 1;
+    totalGastos += (m.monto || 0);
+});
         
         // UTILIDAD BRUTA = Ventas - COS
         const utilidadBruta = totalVentas - cos;

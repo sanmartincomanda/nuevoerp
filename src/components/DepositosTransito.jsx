@@ -1,9 +1,10 @@
 // src/components/DepositosTransito.jsx
 // Módulo de Depósitos en Tránsito
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useChartOfAccounts, useDepositosTransito } from '../hooks/useAccounting.jsx';
+import { useDepositosTransito } from '../hooks/useAccounting.jsx';
+import { usePlanCuentas } from '../hooks/useUnifiedAccounting';
 import { createDepositoTransito, cancelarDepositoTransito } from '../services/accountingService';
 import { storage } from '../firebase';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -232,6 +233,8 @@ export default function DepositosTransito() {
     const [viewingImage, setViewingImage] = useState(null);
     const ticketRef = useRef();
     const fileInputRef = useRef();
+    const [cajasDisponibles, setCajasDisponibles] = useState([]);
+    const [loadingCajas, setLoadingCajas] = useState(false);
 
     // Texto de observación por defecto para depósitos
     const OBSERVACION_DEFAULT = "CUENTAS BANCARIAS A NOMBRE DE LUIS MANUEL SAENZ ROBLERO CUENTA C$ 362705105 CUENTA C$ 362705105";
@@ -255,7 +258,21 @@ export default function DepositosTransito() {
     });
 
     // Obtener cuentas de caja según moneda
-    const cajasDisponibles = getCajaAccounts(formData.moneda);
+   useEffect(() => {
+    const cargarCajas = async () => {
+        setLoadingCajas(true);
+        try {
+            const cajas = await getCajaAccounts(formData.moneda);
+            setCajasDisponibles(cajas || []); // Asegurar que sea array
+        } catch (error) {
+            console.error('Error cargando cajas:', error);
+            setCajasDisponibles([]);
+        } finally {
+            setLoadingCajas(false);
+        }
+    };
+    cargarCajas();
+}, [formData.moneda, getCajaAccounts]);
 
     // Calcular totales
     const totalSeleccionado = formData.cuentasSeleccionadas.reduce((sum, c) => sum + (Number(c.monto) || 0), 0);
@@ -506,67 +523,77 @@ export default function DepositosTransito() {
                                 </Card>
                             </FadeIn>
 
-                            <FadeIn delay={150}>
-                                <Card title="Seleccionar Cajas" icon="wallet">
-                                    <div className="space-y-4">
-                                        {/* Cajas disponibles */}
-                                        <div className="flex flex-wrap gap-2">
-                                            {cajasDisponibles.map(caja => (
-                                                <button
-                                                    key={caja.id}
-                                                    onClick={() => handleAddCuenta(caja)}
-                                                    disabled={formData.cuentasSeleccionadas.find(c => c.accountId === caja.id)}
-                                                    className={`px-3 py-2 rounded-lg text-sm font-semibold transition-all ${
-                                                        formData.cuentasSeleccionadas.find(c => c.accountId === caja.id)
-                                                            ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                                                            : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
-                                                    }`}
-                                                >
-                                                    {caja.name} ({fmt(caja.currency === 'USD' ? caja.balanceUSD : caja.balance, caja.currency === 'USD' ? '$' : 'C$')})
-                                                </button>
-                                            ))}
-                                        </div>
+                           <FadeIn delay={150}>
+    <Card title="Seleccionar Cajas" icon="wallet">
+        <div className="space-y-4">
+            {/* Cajas disponibles */}
+            {loadingCajas ? (
+                <div className="text-center py-4">
+                    <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                    <p className="text-xs text-slate-500 mt-1">Cargando cajas...</p>
+                </div>
+            ) : !Array.isArray(cajasDisponibles) || cajasDisponibles.length === 0 ? (
+                <div className="text-center py-4 text-amber-600 text-sm font-semibold bg-amber-50 rounded-lg">
+                    No hay cajas disponibles para {formData.moneda}
+                </div>
+            ) : (
+                <div className="flex flex-wrap gap-2">
+                    {cajasDisponibles.map(caja => (
+                        <button
+                            key={caja.id}
+                            onClick={() => handleAddCuenta(caja)}
+                            disabled={formData.cuentasSeleccionadas.find(c => c.accountId === caja.id)}
+                            className={`px-3 py-2 rounded-lg text-sm font-semibold transition-all ${
+                                formData.cuentasSeleccionadas.find(c => c.accountId === caja.id)
+                                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
+                            }`}
+                        >
+                            {caja.name} ({fmt(caja.currency === 'USD' ? caja.balanceUSD : caja.balance, caja.currency === 'USD' ? '$' : 'C$')})
+                        </button>
+                    ))}
+                </div>
+            )}
 
-                                        {/* Cajas seleccionadas */}
-                                        {formData.cuentasSeleccionadas.length > 0 && (
-                                            <div className="space-y-2">
-                                                <h4 className="text-sm font-bold text-slate-700">Cajas seleccionadas:</h4>
-                                                {formData.cuentasSeleccionadas.map(cuenta => (
-                                                    <div key={cuenta.accountId} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
-                                                        <div className="flex-1">
-                                                            <div className="font-semibold text-slate-800">{cuenta.accountName}</div>
-                                                            <div className="text-xs text-slate-500">
-                                                                Saldo disponible: {fmt(cuenta.saldoDisponible, formData.moneda === 'USD' ? '$' : 'C$')}
-                                                            </div>
-                                                        </div>
-                                                        <input
-                                                            type="number"
-                                                            step="0.01"
-                                                            value={cuenta.monto}
-                                                            onChange={(e) => updateCuentaMonto(cuenta.accountId, e.target.value)}
-                                                            placeholder="Monto"
-                                                            className="w-32 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-700 focus:border-blue-500 outline-none"
-                                                        />
-                                                        <button
-                                                            onClick={() => removeCuenta(cuenta.accountId)}
-                                                            className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg"
-                                                        >
-                                                            <Icon path={Icons.trash} className="w-4 h-4" />
-                                                        </button>
-                                                    </div>
-                                                ))}
-                                                <div className="flex justify-between items-center p-3 bg-slate-800 rounded-lg">
-                                                    <span className="text-slate-400 font-bold">Total seleccionado:</span>
-                                                    <span className="text-xl font-black text-white">
-                                                        {fmt(totalSeleccionado, formData.moneda === 'USD' ? '$' : 'C$')}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                </Card>
-                            </FadeIn>
-
+            {/* Cajas seleccionadas */}
+            {formData.cuentasSeleccionadas.length > 0 && (
+                <div className="space-y-2">
+                    <h4 className="text-sm font-bold text-slate-700">Cajas seleccionadas:</h4>
+                    {formData.cuentasSeleccionadas.map(cuenta => (
+                        <div key={cuenta.accountId} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
+                            <div className="flex-1">
+                                <div className="font-semibold text-slate-800">{cuenta.accountName}</div>
+                                <div className="text-xs text-slate-500">
+                                    Saldo disponible: {fmt(cuenta.saldoDisponible, formData.moneda === 'USD' ? '$' : 'C$')}
+                                </div>
+                            </div>
+                            <input
+                                type="number"
+                                step="0.01"
+                                value={cuenta.monto}
+                                onChange={(e) => updateCuentaMonto(cuenta.accountId, e.target.value)}
+                                placeholder="Monto"
+                                className="w-32 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-700 focus:border-blue-500 outline-none"
+                            />
+                            <button
+                                onClick={() => removeCuenta(cuenta.accountId)}
+                                className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg"
+                            >
+                                <Icon path={Icons.trash} className="w-4 h-4" />
+                            </button>
+                        </div>
+                    ))}
+                    <div className="flex justify-between items-center p-3 bg-slate-800 rounded-lg">
+                        <span className="text-slate-400 font-bold">Total seleccionado:</span>
+                        <span className="text-xl font-black text-white">
+                            {fmt(totalSeleccionado, formData.moneda === 'USD' ? '$' : 'C$')}
+                        </span>
+                    </div>
+                </div>
+            )}
+        </div>
+    </Card>
+</FadeIn>
                             <FadeIn delay={200}>
                                 <Card title="Desglose de Billetes" icon="cash">
                                     <div className="grid grid-cols-3 md:grid-cols-5 gap-3">

@@ -291,41 +291,33 @@ export const registerMovement = async (movementData) => {
 /**
  * Actualiza el saldo de una cuenta
  */
-export const updateAccountBalance = async (accountId, movementType, amount, amountUSD = 0) => {
-    const accountRef = doc(db, 'planCuentas', accountId);
-    const accountSnap = await getDoc(accountRef);
-    
-    if (!accountSnap.exists()) {
-        throw new Error('Cuenta no encontrada');
-    }
-    
-    const account = accountSnap.data();
-    const nature = ACCOUNT_TYPES[account.type]?.nature || 'deudora';
-    
-    let balanceChange = 0;
-    let balanceUSDChange = 0;
-    
-    // Lógica de naturaleza de cuentas
-    if (nature === 'deudora') {
-        // Cuentas deudoras: Debito aumenta, Crédito disminuye
-        balanceChange = movementType === 'debit' ? amount : -amount;
-        balanceUSDChange = movementType === 'debit' ? amountUSD : -amountUSD;
-    } else {
-        // Cuentas acreedoras: Crédito aumenta, Debito disminuye
-        balanceChange = movementType === 'credit' ? amount : -amount;
-        balanceUSDChange = movementType === 'credit' ? amountUSD : -amountUSD;
-    }
-    
-    const newBalance = (account.balance || 0) + balanceChange;
-    const newBalanceUSD = (account.balanceUSD || 0) + balanceUSDChange;
-    
-    await updateDoc(accountRef, {
-        balance: Number(newBalance.toFixed(2)),
-        balanceUSD: Number(newBalanceUSD.toFixed(2)),
-        updatedAt: Timestamp.now()
-    });
-    
-    return { balance: newBalance, balanceUSD: newBalanceUSD };
+// REEMPLAZA la función actualizarSaldoCuenta con esta:
+
+export const actualizarSaldoCuenta = async (cuentaId, tipoMovimiento, monto, montoUSD = 0) => {
+  const cuentaRef = doc(db, 'planCuentas', cuentaId);
+  const cuentaSnap = await getDoc(cuentaRef);
+
+  if (!cuentaSnap.exists()) return;
+
+  const cuenta = cuentaSnap.data();
+  
+  // FORZAR TODO A NÚMERO DE FORMA BRUTAL
+  let balanceActual = parseFloat(cuenta.balance) || 0;
+  let montoNum = parseFloat(monto) || 0;
+  
+  let nuevoBalance = balanceActual;
+  
+  if (tipoMovimiento === 'debit') {
+    nuevoBalance = balanceActual + montoNum;
+  } else if (tipoMovimiento === 'credit') {
+    nuevoBalance = balanceActual - montoNum;
+  }
+  
+  // Guardar sin toFixed primero para probar
+  await updateDoc(cuentaRef, {
+    balance: nuevoBalance,
+    updatedAt: Timestamp.now()
+  });
 };
 
 /**
@@ -528,9 +520,7 @@ export const procesarCierreCaja = async (cierreId, userId, userEmail) => {
     
     const cierre = cierreSnap.data();
     
-    if (cierre.estado !== 'cerrado') {
-        throw new Error('El cierre debe estar en estado cerrado para procesarse');
-    }
+  
     
     if (cierre.procesado) {
         throw new Error('Este cierre ya fue procesado');
@@ -645,93 +635,128 @@ export const procesarCierreCaja = async (cierreId, userId, userEmail) => {
         }
     }
     
-    // 5. Registrar retenciones (disminuyen efectivo)
-    if (cierre.retenciones && cierre.retenciones.length > 0) {
-        for (const ret of cierre.retenciones) {
-            if (ret.tipo === 'IR' && ret.monto > 0) {
-                const irAccount = await getAccountByCode('2.01.03.01');
-                if (irAccount) {
-                    movements.push(registerMovement({
-                        accountId: irAccount.id,
-                        accountCode: irAccount.code,
-                        type: 'credit',
-                        amount: ret.monto,
-                        description: `Retención IR 2% - Factura ${ret.facturaRelacionada || 'N/A'}`,
-                        reference: `CIERRE-${cierreId}`,
-                        referenceId: cierreId,
-                        referenceType: 'retencionIR',
-                        date: cierre.fecha,
-                        userId,
-                        userEmail,
-                        metadata: { cliente: ret.cliente, factura: ret.facturaRelacionada }
-                    }));
-                }
-            }
-            if (ret.tipo === 'Alcaldia' && ret.monto > 0) {
-                const alcAccount = await getAccountByCode('2.01.03.02');
-                if (alcAccount) {
-                    movements.push(registerMovement({
-                        accountId: alcAccount.id,
-                        accountCode: alcAccount.code,
-                        type: 'credit',
-                        amount: ret.monto,
-                        description: `Retención Alcaldía 1% - Factura ${ret.facturaRelacionada || 'N/A'}`,
-                        reference: `CIERRE-${cierreId}`,
-                        referenceId: cierreId,
-                        referenceType: 'retencionAlcaldia',
-                        date: cierre.fecha,
-                        userId,
-                        userEmail,
-                        metadata: { cliente: ret.cliente, factura: ret.facturaRelacionada }
-                    }));
-                }
-            }
+// 5. Registrar retenciones (disminuyen efectivo) - CORREGIDO
+if (cierre.retenciones && cierre.retenciones.length > 0) {
+  for (const ret of cierre.retenciones) {
+    if (ret.monto > 0) {
+      // A. Registrar en pasivo (obligación fiscal) - YA LO TENÍAS
+      if (ret.tipo === 'IR') {
+        const irAccount = await getAccountByCode('2.01.03.01');
+        if (irAccount) {
+          movements.push(registerMovement({
+            accountId: irAccount.id,
+            accountCode: irAccount.code,
+            type: 'credit', // Aumenta pasivo
+            amount: ret.monto,
+            description: `Retención IR 2% - Factura ${ret.facturaRelacionada || 'N/A'}`,
+            reference: `CIERRE-${cierreId}`,
+            referenceId: cierreId,
+            referenceType: 'retencionIR',
+            date: cierre.fecha,
+            userId,
+            userEmail,
+            metadata: { cliente: ret.cliente, factura: ret.facturaRelacionada }
+          }));
         }
+      }
+      if (ret.tipo === 'Alcaldia') {
+        const alcAccount = await getAccountByCode('2.01.03.02');
+        if (alcAccount) {
+          movements.push(registerMovement({
+            accountId: alcAccount.id,
+            accountCode: alcAccount.code,
+            type: 'credit', // Aumenta pasivo
+            amount: ret.monto,
+            description: `Retención Alcaldía 1% - Factura ${ret.facturaRelacionada || 'N/A'}`,
+            reference: `CIERRE-${cierreId}`,
+            referenceId: cierreId,
+            referenceType: 'retencionAlcaldia',
+            date: cierre.fecha,
+            userId,
+            userEmail,
+            metadata: { cliente: ret.cliente, factura: ret.facturaRelacionada }
+          }));
+        }
+      }
+      
+      // B. 🔥 FALTABA ESTO: Disminuir la caja por la retención
+      const cajaAccount = await getAccountByCode(getCajaCode(cierre.caja, 'NIO'));
+      if (cajaAccount) {
+        movements.push(registerMovement({
+          accountId: cajaAccount.id,
+          accountCode: cajaAccount.code,
+          type: 'credit', // Disminuye activo (caja)
+          amount: ret.monto,
+          description: `Salida por retención ${ret.tipo} - Factura ${ret.facturaRelacionada || 'N/A'}`,
+          reference: `CIERRE-${cierreId}`,
+          referenceId: cierreId,
+          referenceType: `retencion${ret.tipo}`,
+          date: cierre.fecha,
+          userId,
+          userEmail,
+          metadata: { cliente: ret.cliente, factura: ret.facturaRelacionada, tipoRetencion: ret.tipo }
+        }));
+      }
     }
+  }
+}
     
-    // 6. Registrar gastos de caja
-    if (cierre.gastosCaja && cierre.gastosCaja.length > 0) {
-        for (const gasto of cierre.gastosCaja) {
-            if (gasto.monto > 0) {
-                // Registrar en cuenta de gastos
-                const gastoAccount = await getAccountByCode('6.01.02.99'); // Otros gastos admin
-                if (gastoAccount) {
-                    movements.push(registerMovement({
-                        accountId: gastoAccount.id,
-                        accountCode: gastoAccount.code,
-                        type: 'debit',
-                        amount: gasto.monto,
-                        description: `Gasto de caja: ${gasto.concepto}`,
-                        reference: `CIERRE-${cierreId}`,
-                        referenceId: cierreId,
-                        referenceType: 'gastoCaja',
-                        date: cierre.fecha,
-                        userId,
-                        userEmail,
-                        metadata: { responsable: gasto.responsable, comentario: gasto.comentario }
-                    }));
-                }
-                
-                // Disminuir caja
-                const cajaAccount = await getAccountByCode(getCajaCode(cierre.caja, 'NIO'));
-                if (cajaAccount) {
-                    movements.push(registerMovement({
-                        accountId: cajaAccount.id,
-                        accountCode: cajaAccount.code,
-                        type: 'credit',
-                        amount: gasto.monto,
-                        description: `Salida por gasto de caja: ${gasto.concepto}`,
-                        reference: `CIERRE-${cierreId}`,
-                        referenceId: cierreId,
-                        referenceType: 'gastoCaja',
-                        date: cierre.fecha,
-                        userId,
-                        userEmail
-                    }));
-                }
-            }
+// 6. Registrar gastos de caja - MEJORADO CON VALIDACIÓN
+if (cierre.gastosCaja && cierre.gastosCaja.length > 0) {
+  for (const gasto of cierre.gastosCaja) {
+    if (gasto.monto > 0) {
+      // Buscar cuenta de gasto específica si existe, o usar la default
+      let gastoAccountCode = gasto.cuentaContableCode || '6.01.02.99';
+      const gastoAccount = await getAccountByCode(gastoAccountCode);
+      
+      if (!gastoAccount) {
+        console.warn(`Cuenta ${gastoAccountCode} no encontrada, usando 6.01.02.99`);
+        // Fallback a otros gastos
+        const fallbackAccount = await getAccountByCode('6.01.02.99');
+        if (!fallbackAccount) {
+          throw new Error(`No se encontró cuenta de gastos para registrar el gasto: ${gasto.concepto}`);
         }
+      }
+      
+      const targetAccount = gastoAccount || fallbackAccount;
+      
+      // Registrar en cuenta de gastos (DEBITO - aumenta gasto)
+      movements.push(registerMovement({
+        accountId: targetAccount.id,
+        accountCode: targetAccount.code,
+        type: 'debit',
+        amount: gasto.monto,
+        description: `Gasto de caja: ${gasto.concepto}`,
+        reference: `CIERRE-${cierreId}`,
+        referenceId: cierreId,
+        referenceType: 'gastoCaja',
+        date: cierre.fecha,
+        userId,
+        userEmail,
+        metadata: { responsable: gasto.responsable, comentario: gasto.comentario, caja: cierre.caja }
+      }));
+
+      // Disminuir caja (CREDITO - disminuye activo)
+      const cajaAccount = await getAccountByCode(getCajaCode(cierre.caja, 'NIO'));
+      if (cajaAccount) {
+        movements.push(registerMovement({
+          accountId: cajaAccount.id,
+          accountCode: cajaAccount.code,
+          type: 'credit',
+          amount: gasto.monto,
+          description: `Salida por gasto: ${gasto.concepto}`,
+          reference: `CIERRE-${cierreId}`,
+          referenceId: cierreId,
+          referenceType: 'gastoCaja',
+          date: cierre.fecha,
+          userId,
+          userEmail,
+          metadata: { responsable: gasto.responsable, comentario: gasto.comentario, caja: cierre.caja }
+        }));
+      }
     }
+  }
+}
     
     // Ejecutar todos los movimientos
     await Promise.all(movements);
