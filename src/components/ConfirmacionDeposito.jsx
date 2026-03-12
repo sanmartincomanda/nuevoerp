@@ -3,9 +3,9 @@
 
 import React, { useState, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useChartOfAccounts, useDepositosTransito, useDepositosBancarios } from '../hooks/useAccounting.jsx';
+import { usePlanCuentas, useDepositosTransitoERP, useDepositosBancariosERP } from '../hooks/useUnifiedAccounting';
 import { confirmarDepositoBancario } from '../services/accountingService';
-import { fmt } from '../constants';
+
 
 // Iconos SVG
 const Icons = {
@@ -37,6 +37,7 @@ const FadeIn = ({ children, delay = 0, className = "" }) => (
     </div>
 );
 
+
 const Card = ({ title, children, className = "", right, icon, gradient = false }) => (
     <div className={`rounded-2xl shadow-lg border border-slate-200/60 overflow-hidden ${className} ${gradient ? 'bg-slate-800' : 'bg-white'}`}>
         <div className={`flex justify-between items-center px-6 py-4 border-b ${gradient ? 'bg-slate-700 border-slate-600' : 'bg-slate-50 border-slate-100'}`}>
@@ -55,7 +56,6 @@ const Card = ({ title, children, className = "", right, icon, gradient = false }
         <div className={`p-6 ${gradient ? 'text-white' : 'text-slate-700'}`}>{children}</div>
     </div>
 );
-
 const Button = ({ children, variant = 'primary', className = '', disabled, size = 'md', ...props }) => {
     const sizes = { sm: 'px-3 py-1.5 text-xs', md: 'px-4 py-2', lg: 'px-6 py-3' };
     const variants = {
@@ -120,14 +120,30 @@ const ImageModal = ({ imageUrl, onClose }) => {
         </div>
     );
 };
+const safeFmt = (value, symbol = 'C$') => {
+    const num = Number(value);
 
+    if (!Number.isFinite(num)) {
+        return `${symbol} 0.00`;
+    }
+
+    try {
+        return `${symbol} ${num.toLocaleString('es-NI', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        })}`;
+    } catch (error) {
+        console.warn('Error formateando valor:', value, error);
+        return `${symbol} ${num.toFixed(2)}`;
+    }
+};
 // Componente principal
 export default function ConfirmacionDeposito() {
     const { user } = useAuth();
-    const { getBancoAccounts } = useChartOfAccounts();
-    const { depositos: depositosPendientes, loading: loadingPendientes } = useDepositosTransito('pendiente');
-    const { depositos: depositosConfirmados, loading: loadingConfirmados } = useDepositosBancarios();
-    
+    const { getBancoAccounts } = usePlanCuentas();
+    const { depositos: depositosPendientes = [], loading: loadingPendientes, error: errorPendientes } = useDepositosTransitoERP('pendiente');
+    const { depositos: depositosConfirmados = [], loading: loadingConfirmados, error: errorConfirmados } = useDepositosBancariosERP();
+
     const [activeTab, setActiveTab] = useState('pendientes');
     const [loading, setLoading] = useState(false);
     const [selectedDeposito, setSelectedDeposito] = useState(null);
@@ -135,10 +151,8 @@ export default function ConfirmacionDeposito() {
     const [viewingImage, setViewingImage] = useState(null);
     const fileInputRef = useRef();
 
-    // Texto de observación por defecto para depósitos
-    const OBSERVACION_DEFAULT = "CUENTAS BANCARIAS A NOMBRE DE LUIS MANUEL SAENZ ROBLERO CUENTA C$ 362705105 CUENTA C$ 362705105";
+    const OBSERVACION_DEFAULT = "CUENTAS BANCARIAS A NOMBRE DE LUIS MANUEL SAENZ ROBLERO CUENTA C$ 362705105 CUENTA C$ 362785164";
 
-    // Formulario de confirmación
     const [formData, setFormData] = useState({
         bancoDestinoId: '',
         bancoDestinoCode: '',
@@ -150,25 +164,24 @@ export default function ConfirmacionDeposito() {
         comentarios: OBSERVACION_DEFAULT
     });
 
-    // Obtener cuentas bancarias según moneda del depósito
-    const bancosDisponibles = selectedDeposito 
+    const bancosDisponibles = selectedDeposito
         ? getBancoAccounts(selectedDeposito.moneda)
         : [];
 
-    const handleSelectDeposito = (deposito) => {
-        setSelectedDeposito(deposito);
-        setFormData({
-            bancoDestinoId: '',
-            bancoDestinoCode: '',
-            bancoDestinoName: '',
-            fechaDeposito: new Date().toISOString().substring(0, 10),
-            horaDeposito: new Date().toTimeString().substring(0, 5),
-            referenciaBancaria: '',
-            comprobanteFile: null,
-            comentarios: ''
-        });
-        setComprobantePreview(null);
-    };
+const handleSelectDeposito = (deposito) => {
+    setSelectedDeposito(deposito);
+    setFormData({
+        bancoDestinoId: '',
+        bancoDestinoCode: '',
+        bancoDestinoName: '',
+        fechaDeposito: new Date().toISOString().substring(0, 10),
+        horaDeposito: new Date().toTimeString().substring(0, 5),
+        referenciaBancaria: '',
+        comprobanteFile: null,
+        comentarios: OBSERVACION_DEFAULT
+    });
+    setComprobantePreview(null);
+};
 
     const handleFileChange = (e) => {
         const file = e.target.files[0];
@@ -319,7 +332,7 @@ export default function ConfirmacionDeposito() {
                                             </div>
                                             
                                             <div className="text-2xl font-black text-slate-800 mb-2">
-                                                {fmt(dep.total, dep.moneda === 'USD' ? '$' : 'C$')}
+                                                {safeFmt(dep.total, dep.moneda === 'USD' ? '$' : 'C$')}
                                             </div>
                                             
                                             <div className="text-sm text-slate-600 mb-3">
@@ -331,7 +344,7 @@ export default function ConfirmacionDeposito() {
                                                 {dep.cuentasOrigen?.slice(0, 2).map((c, i) => (
                                                     <div key={i} className="text-sm text-slate-600 flex justify-between">
                                                         <span>{c.accountName}</span>
-                                                        <span>{fmt(c.monto, dep.moneda === 'USD' ? '$' : 'C$')}</span>
+                                                        <span>{safeFmt(c.monto, dep.moneda === 'USD' ? '$' : 'C$')}</span>
                                                     </div>
                                                 ))}
                                                 {(dep.cuentasOrigen?.length || 0) > 2 && (
@@ -385,7 +398,7 @@ export default function ConfirmacionDeposito() {
                                         <div className="flex justify-between items-center">
                                             <span className="text-slate-300">Monto Total:</span>
                                             <span className="text-3xl font-black text-emerald-400">
-                                                {fmt(selectedDeposito.total, selectedDeposito.moneda === 'USD' ? '$' : 'C$')}
+                                                {safeFmt(selectedDeposito.total, selectedDeposito.moneda === 'USD' ? '$' : 'C$')}
                                             </span>
                                         </div>
                                     </div>
@@ -395,7 +408,7 @@ export default function ConfirmacionDeposito() {
                                         {selectedDeposito.cuentasOrigen?.map((c, i) => (
                                             <div key={i} className="flex justify-between text-sm py-1">
                                                 <span className="text-slate-300">{c.accountName}</span>
-                                                <span className="text-white font-semibold">{fmt(c.monto, selectedDeposito.moneda === 'USD' ? '$' : 'C$')}</span>
+                                                <span className="text-white font-semibold">{safeFmt(c.monto, selectedDeposito.moneda === 'USD' ? '$' : 'C$')}</span>
                                             </div>
                                         ))}
                                     </div>
@@ -436,7 +449,7 @@ export default function ConfirmacionDeposito() {
                                             <option value="">Seleccionar banco...</option>
                                             {bancosDisponibles.map(banco => (
                                                 <option key={banco.id} value={banco.id}>
-                                                    {banco.name} (Saldo: {fmt(banco.currency === 'USD' ? banco.balanceUSD : banco.balance, banco.currency === 'USD' ? '$' : 'C$')})
+                                                    {banco.name} (Saldo: {safeFmt(banco.currency === 'USD' ? banco.balanceUSD : banco.balance, banco.currency === 'USD' ? '$' : 'C$')})
                                                 </option>
                                             ))}
                                         </select>
@@ -564,7 +577,7 @@ export default function ConfirmacionDeposito() {
                                                     <td className="px-4 py-3">{dep.fecha}</td>
                                                     <td className="px-4 py-3">{dep.bancoDestinoName}</td>
                                                     <td className="px-4 py-3 text-right font-bold">
-                                                        {fmt(dep.monto, dep.moneda === 'USD' ? '$' : 'C$')}
+                                                        {safeFmt(dep.monto, dep.moneda === 'USD' ? '$' : 'C$')}
                                                     </td>
                                                     <td className="px-4 py-3 font-mono text-slate-600">
                                                         {dep.referenciaBancaria}

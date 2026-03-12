@@ -1338,36 +1338,53 @@ export const getBalanceGeneral = async (fecha) => {
     };
 };
 
+export const getCajaAccounts = async (currency = 'NIO') => {
+    const accountsRef = collection(db, 'planCuentas');
+    const snapshot = await getDocs(accountsRef);
+    
+    // Filtrar cuentas de caja (clase 1.01.01) o que contengan "caja" en el nombre
+    const cajas = snapshot.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(acc => {
+            const code = acc.code || '';
+            const name = (acc.name || '').toLowerCase();
+            return code.startsWith('1.01.01') || 
+                   code.startsWith('1.1.01') || 
+                   name.includes('caja') ||
+                   name.includes('efectivo');
+        })
+        .map(acc => ({
+            ...acc,
+            // Detectar moneda por nombre o código
+            currency: acc.currency || 
+                     (acc.name?.toLowerCase().includes('dollar') || 
+                      acc.name?.toLowerCase().includes('usd') ||
+                      acc.code?.includes('10') ? 'USD' : 'NIO')
+        }))
+        .filter(acc => acc.currency === currency && acc.active !== false);
+    
+    return cajas;
+};
 // ============================================
 // EXPORT
 // ============================================
 
 export default {
-    // Constantes
     DOCUMENT_TYPES,
     ACCOUNT_NATURE,
     ACCOUNT_TYPES,
-    
-    // Movimientos contables base
     registerAccountingEntry,
     getMovimientosContables,
     getHistorialCuenta,
-    
-    // Cierre de Caja ERP
     createCierreCajaERP,
     updateCierreCajaERPStatus,
     procesarCierreCajaERP,
-    
-    // Depósitos
     createDepositoTransitoERP,
     confirmarDepositoBancarioERP,
-    
-    // Ajustes
     createAjusteManual,
     aprobarAjusteManual,
     rechazarAjusteManual,
-    
-    // Reportes
     getEstadoResultados,
-    getBalanceGeneral
+    getBalanceGeneral,
+    getCajaAccounts
 };

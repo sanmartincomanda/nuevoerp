@@ -283,7 +283,7 @@ export const registerMovement = async (movementData) => {
     const docRef = await addDoc(movementsRef, movement);
     
     // Actualizar saldo de la cuenta
-    await updateAccountBalance(accountId, type, amount, amountUSD);
+    await actualizarSaldoCuenta(accountId, type, amount, amountUSD);
     
     return { id: docRef.id, ...movement };
 };
@@ -300,22 +300,27 @@ export const actualizarSaldoCuenta = async (cuentaId, tipoMovimiento, monto, mon
   if (!cuentaSnap.exists()) return;
 
   const cuenta = cuentaSnap.data();
-  
-  // FORZAR TODO A NÚMERO DE FORMA BRUTAL
+
   let balanceActual = parseFloat(cuenta.balance) || 0;
+  let balanceUSDActual = parseFloat(cuenta.balanceUSD) || 0;
+
   let montoNum = parseFloat(monto) || 0;
-  
+  let montoUSDNum = parseFloat(montoUSD) || 0;
+
   let nuevoBalance = balanceActual;
-  
+  let nuevoBalanceUSD = balanceUSDActual;
+
   if (tipoMovimiento === 'debit') {
     nuevoBalance = balanceActual + montoNum;
+    nuevoBalanceUSD = balanceUSDActual + montoUSDNum;
   } else if (tipoMovimiento === 'credit') {
     nuevoBalance = balanceActual - montoNum;
+    nuevoBalanceUSD = balanceUSDActual - montoUSDNum;
   }
-  
-  // Guardar sin toFixed primero para probar
+
   await updateDoc(cuentaRef, {
     balance: nuevoBalance,
+    balanceUSD: nuevoBalanceUSD,
     updatedAt: Timestamp.now()
   });
 };
@@ -708,17 +713,18 @@ if (cierre.gastosCaja && cierre.gastosCaja.length > 0) {
       // Buscar cuenta de gasto específica si existe, o usar la default
       let gastoAccountCode = gasto.cuentaContableCode || '6.01.02.99';
       const gastoAccount = await getAccountByCode(gastoAccountCode);
-      
-      if (!gastoAccount) {
-        console.warn(`Cuenta ${gastoAccountCode} no encontrada, usando 6.01.02.99`);
-        // Fallback a otros gastos
-        const fallbackAccount = await getAccountByCode('6.01.02.99');
-        if (!fallbackAccount) {
-          throw new Error(`No se encontró cuenta de gastos para registrar el gasto: ${gasto.concepto}`);
-        }
-      }
-      
-      const targetAccount = gastoAccount || fallbackAccount;
+      let fallbackAccount = null;
+
+if (!gastoAccount) {
+  console.warn(`Cuenta ${gastoAccountCode} no encontrada, usando 6.01.02.99`);
+  fallbackAccount = await getAccountByCode('6.01.02.99');
+
+  if (!fallbackAccount) {
+    throw new Error(`No se encontró cuenta de gastos para registrar el gasto: ${gasto.concepto}`);
+  }
+}
+
+const targetAccount = gastoAccount || fallbackAccount;
       
       // Registrar en cuenta de gastos (DEBITO - aumenta gasto)
       movements.push(registerMovement({

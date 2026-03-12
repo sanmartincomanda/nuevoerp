@@ -57,16 +57,25 @@ export const usePlanCuentas = () => {
         );
     }, [accounts]);
 
-    const getBancoAccounts = useCallback((currency = null) => {
-        if (currency) {
-            return accounts.filter(a => 
-                a.subType === 'banco' && 
-                (a.currency === currency || (!a.currency && currency === 'NIO')) &&
-                !a.isGroup
-            );
-        }
-        return accounts.filter(a => a.subType === 'banco' && !a.isGroup);
-    }, [accounts]);
+const getBancoAccounts = useCallback((currency = 'NIO') => {
+    const prefix = currency === 'USD' ? '1.01.03.' : '1.01.02.';
+
+    return accounts
+        .filter(acc =>
+            acc &&
+            acc.isActive === true &&
+            !acc.isGroup &&
+            acc.type === 'ACTIVO' &&
+            acc.subType === 'banco' &&
+            acc.currency === currency &&
+            typeof acc.code === 'string' &&
+            acc.code.startsWith(prefix)
+        )
+        .filter((acc, index, arr) =>
+            index === arr.findIndex(x => x.code === acc.code)
+        )
+        .sort((a, b) => (a.code || '').localeCompare(b.code || ''));
+}, [accounts]);
 
     const getTransitoAccounts = useCallback((currency = null) => {
         if (currency) {

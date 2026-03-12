@@ -1,14 +1,12 @@
 // src/components/DepositosTransito.jsx
-// Módulo de Depósitos en Tránsito
+// Módulo de Depósitos en Tránsito - VERSIÓN CORREGIDA
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useDepositosTransito } from '../hooks/useAccounting.jsx';
-import { usePlanCuentas } from '../hooks/useUnifiedAccounting';
+import { usePlanCuentas, useDepositosTransitoERP } from '../hooks/useUnifiedAccounting';
 import { createDepositoTransito, cancelarDepositoTransito } from '../services/accountingService';
 import { storage } from '../firebase';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { fmt } from '../constants';
 
 // Iconos SVG
 const Icons = {
@@ -30,6 +28,25 @@ const Icons = {
     chevronRight: "M9 5l7 7-7 7",
     building: "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4",
     camera: "M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z M15 13a3 3 0 11-6 0 3 3 0 016 0z"
+};
+
+// Función segura para formatear moneda (evita el error de minimumFractionDigits)
+const safeFmt = (value, symbol = 'C$') => {
+    const num = Number(value);
+
+    if (!Number.isFinite(num)) {
+        return `${symbol} 0.00`;
+    }
+
+    try {
+        return `${symbol} ${num.toLocaleString('es-NI', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        })}`;
+    } catch (error) {
+        console.warn('Error formateando valor:', value, error);
+        return `${symbol} ${num.toFixed(2)}`;
+    }
 };
 
 // Modal para ver imágenes
@@ -139,6 +156,12 @@ const Ticket80mm = React.forwardRef(({ deposito, cuentas }, ref) => {
         minute: '2-digit'
     });
 
+    // Asegurar que cuentas sea un array
+    const cuentasSafe = Array.isArray(cuentas) ? cuentas : [];
+    const totalSafe = Number(deposito?.total) || 0;
+    const monedaSafe = deposito?.moneda === 'USD' ? '$' : 'C$';
+    const desgloseSafe = deposito?.desgloseBilletes || {};
+
     return (
         <div ref={ref} className="ticket-80mm" style={{ 
             width: '80mm', 
@@ -160,45 +183,45 @@ const Ticket80mm = React.forwardRef(({ deposito, cuentas }, ref) => {
             <div style={{ textAlign: 'center', borderBottom: '1px dashed #000', paddingBottom: '3mm', marginBottom: '3mm' }}>
                 <div style={{ fontSize: '12pt', fontWeight: 'bold' }}>DEPÓSITO EN TRÁNSITO</div>
                 <div style={{ fontSize: '14pt', fontWeight: 'bold', marginTop: '2mm' }}>
-                    #{deposito.numero?.toString().padStart(4, '0')}
+                    #{String(deposito?.numero || 0).padStart(4, '0')}
                 </div>
             </div>
 
             <div style={{ marginBottom: '3mm' }}>
                 <div><strong>Fecha:</strong> {fecha}</div>
-                <div><strong>Responsable:</strong> {deposito.responsable}</div>
-                <div><strong>Moneda:</strong> {deposito.moneda === 'NIO' ? 'C$ (Córdobas)' : '$ (Dólares)'}</div>
+                <div><strong>Responsable:</strong> {deposito?.responsable || 'N/A'}</div>
+                <div><strong>Moneda:</strong> {deposito?.moneda === 'USD' ? '$ (Dólares)' : 'C$ (Córdobas)'}</div>
             </div>
 
             <div style={{ borderTop: '1px dashed #000', borderBottom: '1px dashed #000', padding: '3mm 0', marginBottom: '3mm' }}>
                 <div style={{ fontWeight: 'bold', marginBottom: '2mm' }}>CAJAS INCLUIDAS:</div>
-                {cuentas.map((cuenta, idx) => (
+                {cuentasSafe.map((cuenta, idx) => (
                     <div key={idx} style={{ display: 'flex', justifyContent: 'space-between' }}>
-                        <span>{cuenta.accountName}</span>
-                        <span>{deposito.moneda === 'NIO' ? 'C$' : '$'} {Number(cuenta.monto).toFixed(2)}</span>
+                        <span>{cuenta.accountName || 'Sin nombre'}</span>
+                        <span>{monedaSafe} {Number(cuenta.monto || 0).toFixed(2)}</span>
                     </div>
                 ))}
                 <div style={{ borderTop: '1px solid #000', marginTop: '2mm', paddingTop: '2mm', display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '11pt' }}>
                     <span>TOTAL:</span>
-                    <span>{deposito.moneda === 'NIO' ? 'C$' : '$'} {Number(deposito.total).toFixed(2)}</span>
+                    <span>{monedaSafe} {totalSafe.toFixed(2)}</span>
                 </div>
             </div>
 
-            {deposito.desgloseBilletes && Object.keys(deposito.desgloseBilletes).length > 0 && (
+            {Object.keys(desgloseSafe).length > 0 && (
                 <div style={{ marginBottom: '3mm' }}>
                     <div style={{ fontWeight: 'bold', marginBottom: '2mm' }}>DESGLOSE:</div>
-                    {Object.entries(deposito.desgloseBilletes).map(([denominacion, cantidad]) => (
-                        cantidad > 0 && (
+                    {Object.entries(desgloseSafe).map(([denominacion, cantidad]) => (
+                        Number(cantidad) > 0 && (
                             <div key={denominacion} style={{ display: 'flex', justifyContent: 'space-between' }}>
                                 <span>{denominacion} x {cantidad}</span>
-                                <span>{deposito.moneda === 'NIO' ? 'C$' : '$'} {(Number(denominacion) * cantidad).toFixed(2)}</span>
+                                <span>{monedaSafe} {(Number(denominacion) * Number(cantidad)).toFixed(2)}</span>
                             </div>
                         )
                     ))}
                 </div>
             )}
 
-            {deposito.observaciones && (
+            {deposito?.observaciones && (
                 <div style={{ marginBottom: '5mm', padding: '3mm', backgroundColor: '#f0f0f0', border: '1px dashed #999' }}>
                     <div style={{ fontSize: '8pt', fontWeight: 'bold', marginBottom: '1mm', color: '#666' }}>OBSERVACIÓN:</div>
                     <div style={{ fontSize: '11pt', fontWeight: 'bold', textAlign: 'center', lineHeight: '1.4' }}>
@@ -224,8 +247,8 @@ Ticket80mm.displayName = 'Ticket80mm';
 // Componente principal
 export default function DepositosTransito() {
     const { user } = useAuth();
-    const { getCajaAccounts } = useChartOfAccounts();
-    const { depositos, loading: depositosLoading } = useDepositosTransito();
+    const { accounts, loading: accountsLoading } = usePlanCuentas();
+    const { depositos, loading: depositosLoading, error: depositosError } = useDepositosTransitoERP();
     const [activeTab, setActiveTab] = useState('nuevo');
     const [loading, setLoading] = useState(false);
     const [showTicket, setShowTicket] = useState(false);
@@ -235,9 +258,21 @@ export default function DepositosTransito() {
     const fileInputRef = useRef();
     const [cajasDisponibles, setCajasDisponibles] = useState([]);
     const [loadingCajas, setLoadingCajas] = useState(false);
+const depositosSafe = Array.isArray(depositos) ? depositos : [];
 
+const depositosFiltrados = useMemo(() => {
+    if (activeTab === 'pendientes') {
+        return depositosSafe.filter(d => d.estado === 'pendiente');
+    }
+
+    if (activeTab === 'historial') {
+        return depositosSafe.filter(d => d.estado !== 'pendiente');
+    }
+
+    return depositosSafe;
+}, [depositosSafe, activeTab]);
     // Texto de observación por defecto para depósitos
-    const OBSERVACION_DEFAULT = "CUENTAS BANCARIAS A NOMBRE DE LUIS MANUEL SAENZ ROBLERO CUENTA C$ 362705105 CUENTA C$ 362705105";
+    const OBSERVACION_DEFAULT = "CUENTAS BANCARIAS A NOMBRE DE LUIS MANUEL SAENZ ROBLERO CUENTA C$ 362705105 CUENTA $ 362785164";
 
     // Formulario
     const [formData, setFormData] = useState({
@@ -257,50 +292,91 @@ export default function DepositosTransito() {
         1000: 0, 500: 0, 200: 0, 100: 0, 50: 0, 20: 0, 10: 0, 5: 0, 1: 0, 0.5: 0
     });
 
-    // Obtener cuentas de caja según moneda
-   useEffect(() => {
-    const cargarCajas = async () => {
-        setLoadingCajas(true);
-        try {
-            const cajas = await getCajaAccounts(formData.moneda);
-            setCajasDisponibles(cajas || []); // Asegurar que sea array
-        } catch (error) {
-            console.error('Error cargando cajas:', error);
-            setCajasDisponibles([]);
-        } finally {
-            setLoadingCajas(false);
-        }
-    };
-    cargarCajas();
-}, [formData.moneda, getCajaAccounts]);
+ useEffect(() => {
+    setLoadingCajas(true);
 
-    // Calcular totales
-    const totalSeleccionado = formData.cuentasSeleccionadas.reduce((sum, c) => sum + (Number(c.monto) || 0), 0);
-    const totalDesglose = Object.entries(desglose).reduce((sum, [denom, cantidad]) => {
-        return sum + (Number(denom) * Number(cantidad));
-    }, 0);
+    try {
+        if (!Array.isArray(accounts)) {
+            setCajasDisponibles([]);
+            return;
+        }
+
+        const cajas = accounts
+            .filter(a =>
+                a &&
+                !a.isGroup &&
+                a.subType === 'caja' &&
+                (formData.moneda === 'USD'
+                    ? a.currency === 'USD'
+                    : (a.currency === 'NIO' || !a.currency))
+            )
+            .map(a => ({
+                id: a.id,
+                code: a.code || '',
+                name: a.name || 'Cuenta sin nombre',
+                balance: Number(formData.moneda === 'USD' ? (a.balanceUSD ?? 0) : (a.balance ?? 0))
+            }));
+
+        const unicas = cajas.filter((item, index, arr) =>
+            index === arr.findIndex(x => x.id === item.id)
+        );
+
+        setCajasDisponibles(unicas);
+    } catch (error) {
+        console.error('Error cargando cajas:', error);
+        setCajasDisponibles([]);
+    } finally {
+        setLoadingCajas(false);
+    }
+}, [accounts, formData.moneda]);
+
+    // Calcular totales con validación numérica
+    const totalSeleccionado = useMemo(() => {
+        if (!Array.isArray(formData.cuentasSeleccionadas)) return 0;
+        return formData.cuentasSeleccionadas.reduce((sum, c) => {
+            const monto = Number(c?.monto) || 0;
+            return sum + monto;
+        }, 0);
+    }, [formData.cuentasSeleccionadas]);
+
+    const totalDesglose = useMemo(() => {
+        return Object.entries(desglose || {}).reduce((sum, [denom, cantidad]) => {
+            const val = Number(denom) || 0;
+            const cant = Number(cantidad) || 0;
+            return sum + (val * cant);
+        }, 0);
+    }, [desglose]);
+
     const diferencia = totalDesglose - totalSeleccionado;
 
     const handleAddCuenta = (account) => {
+        if (!account || !account.id) return;
         if (formData.cuentasSeleccionadas.find(c => c.accountId === account.id)) return;
+        
+        // Determinar saldo según moneda con valor por defecto 0
+        const esUSD = account.currency === 'USD';
+        const saldoRaw = esUSD ? (account.balanceUSD || account.balance || 0) : (account.balance || 0);
         
         setFormData(prev => ({
             ...prev,
             cuentasSeleccionadas: [...prev.cuentasSeleccionadas, {
                 accountId: account.id,
-                accountCode: account.code,
-                accountName: account.name,
+                accountCode: account.code || '',
+                accountName: account.name || 'Sin nombre',
                 monto: '',
-                saldoDisponible: account.currency === 'USD' ? (account.balanceUSD || 0) : (account.balance || 0)
+                saldoDisponible: Number(saldoRaw) || 0
             }]
         }));
     };
 
     const updateCuentaMonto = (accountId, monto) => {
+        const montoNum = monto === '' ? '' : Number(monto);
+        if (monto !== '' && isNaN(montoNum)) return;
+        
         setFormData(prev => ({
             ...prev,
             cuentasSeleccionadas: prev.cuentasSeleccionadas.map(c => 
-                c.accountId === accountId ? { ...c, monto } : c
+                c.accountId === accountId ? { ...c, monto: montoNum } : c
             )
         }));
     };
@@ -313,7 +389,10 @@ export default function DepositosTransito() {
     };
 
     const updateDesglose = (denominacion, cantidad) => {
-        setDesglose(prev => ({ ...prev, [denominacion]: Number(cantidad) || 0 }));
+        const cantidadNum = cantidad === '' ? 0 : Number(cantidad);
+        if (isNaN(cantidadNum) || cantidadNum < 0) return;
+        
+        setDesglose(prev => ({ ...prev, [denominacion]: cantidadNum }));
     };
 
     const handleFileChange = (e) => {
@@ -344,7 +423,7 @@ export default function DepositosTransito() {
             return;
         }
         if (diferencia !== 0) {
-            if (!window.confirm(`Hay una diferencia de ${fmt(diferencia)} entre el total seleccionado y el desglose. ¿Desea continuar?`)) {
+            if (!window.confirm(`Hay una diferencia de ${safeFmt(diferencia)} entre el total seleccionado y el desglose. ¿Desea continuar?`)) {
                 return;
             }
         }
@@ -367,7 +446,7 @@ export default function DepositosTransito() {
                     accountId: c.accountId,
                     accountCode: c.accountCode,
                     accountName: c.accountName,
-                    monto: Number(c.monto)
+                    monto: Number(c.monto) || 0
                 })),
                 total: totalSeleccionado,
                 desgloseBilletes: desglose,
@@ -395,19 +474,21 @@ export default function DepositosTransito() {
             
             alert('Depósito en tránsito creado exitosamente');
         } catch (error) {
-            alert('Error: ' + error.message);
+            console.error('Error creando depósito:', error);
+            alert('Error: ' + (error.message || 'Error desconocido'));
         } finally {
             setLoading(false);
         }
     };
 
     const handlePrint = () => {
+        if (!ticketRef.current) return;
         const printWindow = window.open('', '_blank');
         const ticketContent = ticketRef.current.innerHTML;
         printWindow.document.write(`
             <html>
                 <head>
-                    <title>Depósito #${lastDeposito?.numero}</title>
+                    <title>Depósito #${lastDeposito?.numero || ''}</title>
                     <style>
                         @page { size: 80mm auto; margin: 0; }
                         body { margin: 0; padding: 0; font-family: monospace; }
@@ -429,7 +510,8 @@ export default function DepositosTransito() {
             await cancelarDepositoTransito(depositoId, motivo, user?.uid, user?.email);
             alert('Depósito cancelado exitosamente');
         } catch (error) {
-            alert('Error: ' + error.message);
+            console.error('Error cancelando:', error);
+            alert('Error: ' + (error.message || 'Error desconocido'));
         } finally {
             setLoading(false);
         }
@@ -443,6 +525,18 @@ export default function DepositosTransito() {
         };
         return badges[estado] || <Badge>{estado}</Badge>;
     };
+
+    // Loading general
+    if (accountsLoading) {
+        return (
+            <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+                <div className="text-center">
+                    <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                    <p className="mt-2 text-slate-500">Cargando plan de cuentas...</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-slate-50 p-4 md:p-8">
@@ -507,8 +601,9 @@ export default function DepositosTransito() {
                                             <select
                                                 value={formData.moneda}
                                                 onChange={(e) => {
-                                                    setFormData({...formData, moneda: e.target.value, cuentasSeleccionadas: []});
-                                                    setDesglose(e.target.value === 'USD' 
+                                                    const newMoneda = e.target.value;
+                                                    setFormData({...formData, moneda: newMoneda, cuentasSeleccionadas: []});
+                                                    setDesglose(newMoneda === 'USD' 
                                                         ? { 100: 0, 50: 0, 20: 0, 10: 0, 5: 0, 1: 0, 0.5: 0, 0.25: 0 }
                                                         : { 1000: 0, 500: 0, 200: 0, 100: 0, 50: 0, 20: 0, 10: 0, 5: 0, 1: 0, 0.5: 0 }
                                                     );
@@ -524,81 +619,87 @@ export default function DepositosTransito() {
                             </FadeIn>
 
                            <FadeIn delay={150}>
-    <Card title="Seleccionar Cajas" icon="wallet">
-        <div className="space-y-4">
-            {/* Cajas disponibles */}
-            {loadingCajas ? (
-                <div className="text-center py-4">
-                    <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-                    <p className="text-xs text-slate-500 mt-1">Cargando cajas...</p>
-                </div>
-            ) : !Array.isArray(cajasDisponibles) || cajasDisponibles.length === 0 ? (
-                <div className="text-center py-4 text-amber-600 text-sm font-semibold bg-amber-50 rounded-lg">
-                    No hay cajas disponibles para {formData.moneda}
-                </div>
-            ) : (
-                <div className="flex flex-wrap gap-2">
-                    {cajasDisponibles.map(caja => (
-                        <button
-                            key={caja.id}
-                            onClick={() => handleAddCuenta(caja)}
-                            disabled={formData.cuentasSeleccionadas.find(c => c.accountId === caja.id)}
-                            className={`px-3 py-2 rounded-lg text-sm font-semibold transition-all ${
-                                formData.cuentasSeleccionadas.find(c => c.accountId === caja.id)
-                                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
-                            }`}
-                        >
-                            {caja.name} ({fmt(caja.currency === 'USD' ? caja.balanceUSD : caja.balance, caja.currency === 'USD' ? '$' : 'C$')})
-                        </button>
-                    ))}
-                </div>
-            )}
+                                <Card title="Seleccionar Cajas" icon="wallet">
+                                    <div className="space-y-4">
+                                        {/* Cajas disponibles */}
+                                        {loadingCajas ? (
+                                            <div className="text-center py-4">
+                                                <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                                                <p className="text-xs text-slate-500 mt-1">Cargando cajas...</p>
+                                            </div>
+                                        ) : cajasDisponibles.length === 0 ? (
+                                            <div className="text-center py-4 text-amber-600 text-sm font-semibold bg-amber-50 rounded-lg">
+                                                No hay cajas disponibles para {formData.moneda}
+                                            </div>
+                                        ) : (
+                                            <div className="flex flex-wrap gap-2">
+                                                {cajasDisponibles.map(caja => {
+                                                    const isSelected = formData.cuentasSeleccionadas.find(c => c.accountId === caja.id);
+                                                    const balance = caja.currency === 'USD' ? (caja.balanceUSD || 0) : (caja.balance || 0);
+                                                    
+                                                    return (
+                                                        <button
+                                                            key={`caja-${caja.id}`} // Key única para evitar duplicados
+                                                            onClick={() => handleAddCuenta(caja)}
+                                                            disabled={isSelected}
+                                                            className={`px-3 py-2 rounded-lg text-sm font-semibold transition-all ${
+                                                                isSelected
+                                                                    ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                                                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
+                                                            }`}
+                                                        >
+                                                            {caja.name || 'Sin nombre'} ({safeFmt(balance, caja.currency === 'USD' ? '$' : 'C$')})
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
 
-            {/* Cajas seleccionadas */}
-            {formData.cuentasSeleccionadas.length > 0 && (
-                <div className="space-y-2">
-                    <h4 className="text-sm font-bold text-slate-700">Cajas seleccionadas:</h4>
-                    {formData.cuentasSeleccionadas.map(cuenta => (
-                        <div key={cuenta.accountId} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
-                            <div className="flex-1">
-                                <div className="font-semibold text-slate-800">{cuenta.accountName}</div>
-                                <div className="text-xs text-slate-500">
-                                    Saldo disponible: {fmt(cuenta.saldoDisponible, formData.moneda === 'USD' ? '$' : 'C$')}
-                                </div>
-                            </div>
-                            <input
-                                type="number"
-                                step="0.01"
-                                value={cuenta.monto}
-                                onChange={(e) => updateCuentaMonto(cuenta.accountId, e.target.value)}
-                                placeholder="Monto"
-                                className="w-32 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-700 focus:border-blue-500 outline-none"
-                            />
-                            <button
-                                onClick={() => removeCuenta(cuenta.accountId)}
-                                className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg"
-                            >
-                                <Icon path={Icons.trash} className="w-4 h-4" />
-                            </button>
-                        </div>
-                    ))}
-                    <div className="flex justify-between items-center p-3 bg-slate-800 rounded-lg">
-                        <span className="text-slate-400 font-bold">Total seleccionado:</span>
-                        <span className="text-xl font-black text-white">
-                            {fmt(totalSeleccionado, formData.moneda === 'USD' ? '$' : 'C$')}
-                        </span>
-                    </div>
-                </div>
-            )}
-        </div>
-    </Card>
-</FadeIn>
+                                        {/* Cajas seleccionadas */}
+                                        {formData.cuentasSeleccionadas.length > 0 && (
+                                            <div className="space-y-2">
+                                                <h4 className="text-sm font-bold text-slate-700">Cajas seleccionadas:</h4>
+                                                {formData.cuentasSeleccionadas.map(cuenta => (
+                                                    <div key={`sel-${cuenta.accountId}`} className="flex items-center gap-3 p-3 bg-slate-50 rounded-lg">
+                                                        <div className="flex-1">
+                                                            <div className="font-semibold text-slate-800">{cuenta.accountName}</div>
+                                                            <div className="text-xs text-slate-500">
+                                                                Saldo disponible: {safeFmt(Number(cuenta.saldoDisponible) || 0, formData.moneda === 'USD' ? '$' : 'C$')}
+                                                            </div>
+                                                        </div>
+                                                        <input
+                                                            type="number"
+                                                            step="0.01"
+                                                            value={cuenta.monto === '' ? '' : cuenta.monto}
+                                                            onChange={(e) => updateCuentaMonto(cuenta.accountId, e.target.value)}
+                                                            placeholder="Monto"
+                                                            className="w-32 px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-700 focus:border-blue-500 outline-none"
+                                                        />
+                                                        <button
+                                                            onClick={() => removeCuenta(cuenta.accountId)}
+                                                            className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg"
+                                                        >
+                                                            <Icon path={Icons.trash} className="w-4 h-4" />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                                <div className="flex justify-between items-center p-3 bg-slate-800 rounded-lg">
+                                                    <span className="text-slate-400 font-bold">Total seleccionado:</span>
+                                                    <span className="text-xl font-black text-white">
+                                                        {safeFmt(totalSeleccionado, formData.moneda === 'USD' ? '$' : 'C$')}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </Card>
+                            </FadeIn>
+
                             <FadeIn delay={200}>
                                 <Card title="Desglose de Billetes" icon="cash">
                                     <div className="grid grid-cols-3 md:grid-cols-5 gap-3">
-                                        {Object.keys(desglose).map(denominacion => (
-                                            <div key={denominacion} className="space-y-1">
+                                        {Object.keys(desglose || {}).map(denominacion => (
+                                            <div key={`denom-${denominacion}`} className="space-y-1">
                                                 <label className="text-xs font-bold text-slate-500">
                                                     {formData.moneda === 'USD' ? '$' : 'C$'}{denominacion}
                                                 </label>
@@ -610,7 +711,7 @@ export default function DepositosTransito() {
                                                     className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold text-center focus:border-blue-500 outline-none"
                                                 />
                                                 <div className="text-xs text-slate-400 text-center">
-                                                    = {fmt(Number(denominacion) * (desglose[denominacion] || 0), formData.moneda === 'USD' ? '$' : 'C$')}
+                                                    = {safeFmt((Number(denominacion) || 0) * (Number(desglose[denominacion]) || 0), formData.moneda === 'USD' ? '$' : 'C$')}
                                                 </div>
                                             </div>
                                         ))}
@@ -619,12 +720,12 @@ export default function DepositosTransito() {
                                         <div className="flex justify-between items-center">
                                             <span className="font-bold text-slate-700">Total contado:</span>
                                             <span className="text-xl font-black text-slate-800">
-                                                {fmt(totalDesglose, formData.moneda === 'USD' ? '$' : 'C$')}
+                                                {safeFmt(totalDesglose, formData.moneda === 'USD' ? '$' : 'C$')}
                                             </span>
                                         </div>
                                         {diferencia !== 0 && (
                                             <div className={`mt-2 text-sm font-bold ${diferencia > 0 ? 'text-amber-600' : 'text-rose-600'}`}>
-                                                Diferencia: {fmt(diferencia, formData.moneda === 'USD' ? '$' : 'C$')}
+                                                Diferencia: {safeFmt(diferencia, formData.moneda === 'USD' ? '$' : 'C$')}
                                             </div>
                                         )}
                                     </div>
@@ -658,7 +759,7 @@ export default function DepositosTransito() {
                             </FadeIn>
 
                             <FadeIn delay={250}>
-                                <Card title="Observaciones" icon="info" collapsible defaultOpen={false}>
+                                <Card title="Observaciones" icon="info">
                                     <textarea
                                         value={formData.observaciones}
                                         onChange={(e) => setFormData({...formData, observaciones: e.target.value})}
@@ -744,7 +845,7 @@ export default function DepositosTransito() {
                                     <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
                                     <p className="mt-2 text-slate-500">Cargando...</p>
                                 </div>
-                            ) : depositos.length === 0 ? (
+                            ) : depositosFiltrados.length === 0 ? (
                                 <div className="text-center py-12 text-slate-400">
                                     <Icon path={Icons.info} className="w-16 h-16 mx-auto mb-4 text-slate-300" />
                                     <p>No hay depósitos {activeTab === 'pendientes' ? 'pendientes' : 'en el historial'}</p>
@@ -765,18 +866,18 @@ export default function DepositosTransito() {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
-                                            {depositos.map(dep => (
-                                                <tr key={dep.id} className="hover:bg-slate-50">
-                                                    <td className="px-4 py-3 font-mono font-bold">#{dep.numero?.toString().padStart(4, '0')}</td>
-                                                    <td className="px-4 py-3">{dep.fecha}</td>
-                                                    <td className="px-4 py-3">{dep.responsable}</td>
+                                            {depositosFiltrados.map(dep => (
+                                                <tr key={`dep-${dep.id}`} className="hover:bg-slate-50">
+                                                    <td className="px-4 py-3 font-mono font-bold">#{String(dep.numero || 0).padStart(4, '0')}</td>
+                                                    <td className="px-4 py-3">{dep.fecha || 'N/A'}</td>
+                                                    <td className="px-4 py-3">{dep.responsable || 'N/A'}</td>
                                                     <td className="px-4 py-3 text-center">
                                                         <Badge variant={dep.moneda === 'USD' ? 'info' : 'default'}>
                                                             {dep.moneda === 'USD' ? '$' : 'C$'}
                                                         </Badge>
                                                     </td>
                                                     <td className="px-4 py-3 text-right font-bold">
-                                                        {fmt(dep.total, dep.moneda === 'USD' ? '$' : 'C$')}
+                                                        {safeFmt(Number(dep.total) || 0, dep.moneda === 'USD' ? '$' : 'C$')}
                                                     </td>
                                                     <td className="px-4 py-3 text-center">
                                                         {getEstadoBadge(dep.estado)}
@@ -801,6 +902,8 @@ export default function DepositosTransito() {
                                                                     variant="success" 
                                                                     size="sm"
                                                                     onClick={() => {/* Ir a confirmación */}}
+                                                                    disabled
+                                                                    title="Próximamente"
                                                                 >
                                                                     <Icon path={Icons.arrowRight} className="w-4 h-4" />
                                                                 </Button>
