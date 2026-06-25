@@ -4,7 +4,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { collection, addDoc, updateDoc, doc, Timestamp, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, doc, getDoc, Timestamp, query, where, orderBy, onSnapshot } from 'firebase/firestore';
 import { usePlanCuentas } from '../../hooks/useUnifiedAccounting';
 import { createCierreCajaERP, updateCierreCajaERPStatus, procesarCierreCajaERP } from '../../services/unifiedAccountingService';
 import { uploadMultiplePhotos } from '../../services/accountingService';
@@ -240,6 +240,189 @@ const PhotoUploader = ({ fotos, onPhotosChange, maxPhotos = 5 }) => {
     );
 };
 
+const getVoucherCierreCode = (cierre = {}) =>
+    cierre?.codigo || cierre?.numero || cierre?.id?.slice(-6)?.toUpperCase() || 'SIN-CODIGO';
+
+const sumFacturaMembretadas = (facturas = []) =>
+    (Array.isArray(facturas) ? facturas : []).reduce((sum, factura) => sum + (Number(factura?.monto) || 0), 0);
+
+const splitRetencionesVoucher = (retenciones = []) =>
+    (Array.isArray(retenciones) ? retenciones : []).reduce(
+        (accumulator, item) => {
+            const tipo = String(item?.tipo || '').toLowerCase();
+            const monto = Number(item?.monto || 0);
+
+            if (monto <= 0) return accumulator;
+
+            if (tipo.includes('alcal')) {
+                accumulator.municipal += monto;
+                return accumulator;
+            }
+
+            accumulator.ir += monto;
+            return accumulator;
+        },
+        { ir: 0, municipal: 0 }
+    );
+
+const formatVoucherCurrency = (amount) =>
+    `C$ ${Number(amount || 0).toLocaleString('es-NI', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    })}`;
+
+const escapeVoucherHtml = (value = '') =>
+    String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+const buildCierreVoucherSummary = (cierre = {}) => {
+    const facturasMembretadas = sumFacturaMembretadas(cierre?.facturasMembretadas);
+    const recibosCajaMembretados = Number(cierre?.totalAbonosRecibidos || 0);
+    const { ir, municipal } = splitRetencionesVoucher(cierre?.retenciones);
+
+    return {
+        codigo: getVoucherCierreCode(cierre),
+        fecha: cierre?.fecha || '',
+        tienda: cierre?.tienda || '',
+        caja: cierre?.caja || '',
+        cajero: cierre?.cajero || '',
+        facturasMembretadas,
+        recibosCajaMembretados,
+        totalIngresoMembretado: facturasMembretadas + recibosCajaMembretados,
+        retencionIR: ir,
+        retencionMunicipal: municipal,
+        posBAC: Number(cierre?.posBAC || 0),
+        posBANPRO: Number(cierre?.posBANPRO || 0),
+        posLAFISE: Number(cierre?.posLAFISE || 0),
+        transferenciaBAC: Number(cierre?.transferenciaBAC || 0),
+        transferenciaLAFISE: Number(cierre?.transferenciaLAFISE || 0),
+        transferenciaBANPRO: Number(cierre?.transferenciaBANPRO || 0),
+        rc: Number(cierre?.rc || 0)
+    };
+};
+
+const createCierreVoucherHtml = (summary = {}) => {
+    const rows = [
+        ['Fact membretadas', formatVoucherCurrency(summary.facturasMembretadas)],
+        ['Recibo de caja membretados', formatVoucherCurrency(summary.recibosCajaMembretados)],
+        ['TOTAL INGRESO MEMBRETADO', formatVoucherCurrency(summary.totalIngresoMembretado)],
+        ['Retenciones IR', formatVoucherCurrency(summary.retencionIR)],
+        ['Retenciones Municipal', formatVoucherCurrency(summary.retencionMunicipal)],
+        ['POS BAC', formatVoucherCurrency(summary.posBAC)],
+        ['POS BANPRO', formatVoucherCurrency(summary.posBANPRO)],
+        ['POS LAFISE', formatVoucherCurrency(summary.posLAFISE)],
+        ['Transferencia BAC', formatVoucherCurrency(summary.transferenciaBAC)],
+        ['Transferencia Lafise', formatVoucherCurrency(summary.transferenciaLAFISE)],
+        ['Transferencia BANPRO', formatVoucherCurrency(summary.transferenciaBANPRO)],
+        ['RC', formatVoucherCurrency(summary.rc)]
+    ];
+
+    return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Voucher cierre ${escapeVoucherHtml(summary.codigo || '')}</title>
+  <style>
+    @page { size: 80mm auto; margin: 4mm; }
+    html, body {
+      width: 72mm;
+      margin: 0;
+      padding: 0;
+      background: #ffffff;
+      color: #111827;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    body { padding: 2mm 0; }
+    .ticket { width: 100%; }
+    .center { text-align: center; }
+    .title {
+      font-size: 14px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 2mm;
+    }
+    .meta {
+      border-top: 1px dashed #9ca3af;
+      border-bottom: 1px dashed #9ca3af;
+      padding: 2mm 0;
+      margin-bottom: 2.5mm;
+    }
+    .meta-row,
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: flex-start;
+    }
+    .meta-row + .meta-row,
+    .row + .row { margin-top: 1.4mm; }
+    .label {
+      flex: 1;
+      min-width: 0;
+      font-weight: 700;
+    }
+    .value {
+      min-width: 22mm;
+      text-align: right;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .section-title {
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      margin-bottom: 2mm;
+      letter-spacing: 0.04em;
+    }
+    .rows { margin-bottom: 2mm; }
+    .row.total {
+      border-top: 1px solid #111827;
+      margin-top: 2mm;
+      padding-top: 2mm;
+      font-size: 12px;
+    }
+    .footer {
+      border-top: 1px dashed #9ca3af;
+      padding-top: 2mm;
+      margin-top: 2.5mm;
+      text-align: center;
+      font-size: 10px;
+      color: #4b5563;
+    }
+  </style>
+</head>
+<body>
+  <div class="ticket">
+    <div class="center title">Cierre de caja ERP</div>
+    <div class="meta">
+      <div class="meta-row"><span class="label">Codigo</span><span class="value">${escapeVoucherHtml(summary.codigo || '-')}</span></div>
+      <div class="meta-row"><span class="label">Fecha</span><span class="value">${escapeVoucherHtml(summary.fecha || '-')}</span></div>
+      <div class="meta-row"><span class="label">Sucursal</span><span class="value">${escapeVoucherHtml(summary.tienda || '-')}</span></div>
+      <div class="meta-row"><span class="label">Caja</span><span class="value">${escapeVoucherHtml(summary.caja || '-')}</span></div>
+      <div class="meta-row"><span class="label">Cajero</span><span class="value">${escapeVoucherHtml(summary.cajero || '-')}</span></div>
+    </div>
+    <div class="section-title">Resumen</div>
+    <div class="rows">
+      ${rows
+          .map(
+              ([label, value], index) =>
+                  `<div class="row${index === 2 ? ' total' : ''}"><span class="label">${escapeVoucherHtml(label)}</span><span class="value">${escapeVoucherHtml(value)}</span></div>`
+          )
+          .join('')}
+    </div>
+    <div class="footer">Generado automaticamente desde el cierre de caja</div>
+  </div>
+</body>
+</html>`;
+};
+
 // ============ COMPONENTE PRINCIPAL ============
 export default function CierreCajaERP() {
     const { user } = useAuth();
@@ -250,6 +433,7 @@ export default function CierreCajaERP() {
     const [cierres, setCierres] = useState([]);
     const [cierresLoading, setCierresLoading] = useState(true);
     const [editingCierre, setEditingCierre] = useState(null);
+    const [processedNotice, setProcessedNotice] = useState(null);
     
     const cuentasGastos = getGastoAccounts();
     const cajasDisponibles = getCajaAccounts('NIO');
@@ -389,12 +573,23 @@ export default function CierreCajaERP() {
                 }
             }
 
+            let cierreProcesado = { id: cierreId, ...cierreData };
+
             // Si es cerrado, procesar movimientos contables
             if (estado === 'cerrado') {
                 await procesarCierreCajaERP(cierreId, user?.uid, user?.email);
+
+                const cierreSnapshot = await getDoc(doc(db, 'cierresCajaERP', cierreId));
+                if (cierreSnapshot.exists()) {
+                    cierreProcesado = { id: cierreSnapshot.id, ...cierreSnapshot.data() };
+                }
             }
 
-            alert(`Cierre ${editingCierre ? 'actualizado' : 'guardado'} exitosamente como ${estado.toUpperCase()}`);
+            if (estado === 'cerrado') {
+                openProcessedNotice(cierreProcesado);
+            } else {
+                alert(`Cierre ${editingCierre ? 'actualizado' : 'guardado'} exitosamente como ${estado.toUpperCase()}`);
+            }
             
             // Reset form
             setFormData(initialFormData);
@@ -464,8 +659,15 @@ export default function CierreCajaERP() {
             await updateCierreCajaERPStatus(cierre.id, nuevoEstado, user?.uid);
             if (nuevoEstado === 'cerrado') {
                 await procesarCierreCajaERP(cierre.id, user?.uid, user?.email);
+                const cierreSnapshot = await getDoc(doc(db, 'cierresCajaERP', cierre.id));
+                if (cierreSnapshot.exists()) {
+                    openProcessedNotice({ id: cierreSnapshot.id, ...cierreSnapshot.data() });
+                } else {
+                    openProcessedNotice({ ...cierre, estado: nuevoEstado });
+                }
+            } else {
+                alert(`Cierre cambiado a ${nuevoEstado.toUpperCase()}`);
             }
-            alert(`Cierre cambiado a ${nuevoEstado.toUpperCase()}`);
         } catch (error) {
             alert('Error: ' + error.message);
         } finally {
@@ -486,6 +688,65 @@ export default function CierreCajaERP() {
         const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
         return date.toLocaleString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     };
+
+    function printCierreThermalVoucher(cierre) {
+        if (!cierre || typeof window === 'undefined' || typeof document === 'undefined') return;
+
+        const summary = buildCierreVoucherSummary(cierre);
+        const iframe = document.createElement('iframe');
+        iframe.setAttribute('title', `voucher-cierre-${summary.codigo || 'sin-codigo'}`);
+        iframe.style.position = 'fixed';
+        iframe.style.width = '0';
+        iframe.style.height = '0';
+        iframe.style.border = '0';
+        iframe.style.opacity = '0';
+        iframe.style.pointerEvents = 'none';
+        iframe.srcdoc = createCierreVoucherHtml(summary);
+
+        const cleanup = () => {
+            window.setTimeout(() => {
+                if (iframe.parentNode) {
+                    iframe.parentNode.removeChild(iframe);
+                }
+            }, 800);
+        };
+
+        iframe.onload = () => {
+            const ticketWindow = iframe.contentWindow;
+            if (!ticketWindow) {
+                cleanup();
+                return;
+            }
+
+            ticketWindow.onafterprint = cleanup;
+            window.setTimeout(() => {
+                ticketWindow.focus();
+                ticketWindow.print();
+                cleanup();
+            }, 250);
+        };
+
+        document.body.appendChild(iframe);
+    }
+
+    function openProcessedNotice(cierreProcesado) {
+        if (!cierreProcesado) return;
+
+        setProcessedNotice({
+            id: cierreProcesado.id,
+            codigo: getVoucherCierreCode(cierreProcesado),
+            fecha: cierreProcesado.fecha || '',
+            tienda: cierreProcesado.tienda || '',
+            caja: cierreProcesado.caja || '',
+            cajero: cierreProcesado.cajero || '',
+            totalIngreso: Number(cierreProcesado.totalIngreso || 0),
+            cierreData: cierreProcesado
+        });
+
+        window.setTimeout(() => {
+            printCierreThermalVoucher(cierreProcesado);
+        }, 250);
+    }
 
     return (
         <div className="min-h-screen bg-slate-50/50 pb-20">
@@ -665,6 +926,7 @@ export default function CierreCajaERP() {
                                                         {cierre.estado !== 'cerrado' && <Button variant="ghost" size="sm" onClick={() => handleEdit(cierre)}><Icon path={Icons.edit} className="w-4 h-4" /></Button>}
                                                         {cierre.estado === 'borrador' && <Button variant="warning" size="sm" onClick={() => handleCambiarEstado(cierre, 'pendiente')}><Icon path={Icons.lock} className="w-4 h-4" /></Button>}
                                                         {cierre.estado === 'pendiente' && <Button variant="success" size="sm" onClick={() => handleCambiarEstado(cierre, 'cerrado')}><Icon path={Icons.check} className="w-4 h-4" /></Button>}
+                                                        {cierre.estado === 'cerrado' && <Button variant="ghost" size="sm" onClick={() => printCierreThermalVoucher(cierre)} title="Imprimir voucher 80mm"><Icon path={Icons.printer} className="w-4 h-4" /></Button>}
                                                     </div>
                                                 </td>
                                             </tr>
@@ -676,6 +938,63 @@ export default function CierreCajaERP() {
                     </Card>
                 )}
             </div>
+
+            {processedNotice && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+                    <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+                        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
+                            <Icon path={Icons.checkCircle} className="h-9 w-9 text-emerald-600" />
+                        </div>
+                        <h2 className="text-center text-2xl font-bold text-slate-900">Cierre procesado</h2>
+                        <p className="mt-2 text-center text-sm text-slate-500">
+                            El cierre se guardo correctamente y el voucher 80mm se envio a impresion.
+                        </p>
+
+                        <div className="mt-6 space-y-2 rounded-xl bg-slate-50 p-4">
+                            <div className="flex justify-between gap-4">
+                                <span className="text-sm text-slate-500">Codigo</span>
+                                <span className="text-right font-medium">{processedNotice.codigo || '-'}</span>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                                <span className="text-sm text-slate-500">Sucursal</span>
+                                <span className="text-right font-medium">{processedNotice.tienda || '-'}</span>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                                <span className="text-sm text-slate-500">Caja</span>
+                                <span className="text-right font-medium">{processedNotice.caja || '-'}</span>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                                <span className="text-sm text-slate-500">Cajero</span>
+                                <span className="text-right font-medium">{processedNotice.cajero || '-'}</span>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                                <span className="text-sm text-slate-500">Ingreso SICAR</span>
+                                <span className="text-right font-medium">{fmt(processedNotice.totalIngreso || 0)}</span>
+                            </div>
+                        </div>
+
+                        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+                            <Button
+                                type="button"
+                                variant="warning"
+                                className="flex-1"
+                                onClick={() => printCierreThermalVoucher(processedNotice.cierreData)}
+                            >
+                                <Icon path={Icons.printer} className="w-4 h-4" />
+                                Reimprimir voucher 80mm
+                            </Button>
+                            <Button
+                                type="button"
+                                variant="primary"
+                                className="flex-1"
+                                onClick={() => setProcessedNotice(null)}
+                            >
+                                Continuar
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
